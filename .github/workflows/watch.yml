@@ -1,0 +1,61 @@
+name: Watch Kereby listings
+
+on:
+  schedule:
+    # Every 5 minutes. GitHub's free scheduler does not guarantee exact
+    # timing under load -- in practice this often runs every ~10-15 min.
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}   # lets you trigger a run manually from the Actions tab
+
+permissions:
+  contents: write   # needed to commit seen.json back to the repo
+
+concurrency:
+  group: kereby-watch
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      - name: Run watcher
+        env:
+          TARGET_ROOMS: "2"
+          AUTO_APPLY: "true"
+          APPLICANT_NAME: ${{ secrets.APPLICANT_NAME }}
+          APPLICANT_EMAIL: ${{ secrets.APPLICANT_EMAIL }}
+          APPLICANT_MESSAGE: ${{ secrets.APPLICANT_MESSAGE }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          NOTIFY_TO: ${{ secrets.NOTIFY_TO }}
+        run: python apply_bot.py
+
+      - name: Upload confirmation screenshots (debugging aid)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: confirmation-screenshots
+          path: /tmp/confirm_*.png
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Commit updated seen.json
+        run: |
+          git config user.name "kereby-watcher-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add seen.json
+          git diff --cached --quiet || git commit -m "Update seen listings [skip ci]"
+          git push
