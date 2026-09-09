@@ -131,19 +131,55 @@ def apply_to_listing(url: str, submit: bool = True) -> bool:
             browser.close()
 
 
+BOOKING_TEXT_RE = re.compile("Book fremvisning|Bestil fremvisning", re.IGNORECASE)
+
+
+def _dismiss_cookie_banner(page) -> None:
+    """Best-effort dismissal of the Cookiebot consent banner that overlays
+    the page on first load and can block clicks on elements underneath it."""
+    accept_labels = ["Tillad alle", "Accepter alle", "Accept all", "Tillad valgte"]
+
+    # Try on the main page first.
+    for label in accept_labels:
+        try:
+            page.get_by_role("button", name=re.compile(label, re.IGNORECASE)).first.click(timeout=3000)
+            print(f"[cookies] dismissed via page button '{label}'")
+            return
+        except Exception:
+            continue
+
+    # Cookiebot commonly renders inside an iframe (id="CybotCookiebotDialog").
+    try:
+        frame = page.frame_locator("#CybotCookiebotDialog")
+        for label in accept_labels:
+            try:
+                frame.get_by_role("button", name=re.compile(label, re.IGNORECASE)).click(timeout=3000)
+                print(f"[cookies] dismissed via iframe button '{label}'")
+                return
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    print("[cookies] no cookie banner found/dismissed (may not have been present)")
+
+
 def _fill_and_maybe_submit(page, submit: bool, url: str) -> bool:
-    # The "Bestil fremvisning" trigger might be a <button>, a <div>, or an
+    _dismiss_cookie_banner(page)
+    page.wait_for_timeout(500)  # let the banner's exit animation/removal settle
+
+    # The booking trigger might be a <button>, a <div>, or an
     # <a> depending on the theme markup, so try several locator strategies
     # rather than assuming one element type.
-    dialog = page.get_by_role("dialog", name=re.compile("Bestil fremvisning", re.IGNORECASE))
+    dialog = page.get_by_role("dialog", name=BOOKING_TEXT_RE)
     opened = False
     if dialog.count() > 0 and dialog.first.is_visible():
         opened = True  # dialog already present/visible, no click needed
     else:
         click_strategies = [
-            lambda: page.get_by_role("button", name=re.compile("Bestil fremvisning", re.IGNORECASE)).first,
-            lambda: page.get_by_role("link", name=re.compile("Bestil fremvisning", re.IGNORECASE)).first,
-            lambda: page.get_by_text(re.compile("Bestil fremvisning", re.IGNORECASE)).first,
+            lambda: page.get_by_role("button", name=BOOKING_TEXT_RE).first,
+            lambda: page.get_by_role("link", name=BOOKING_TEXT_RE).first,
+            lambda: page.get_by_text(BOOKING_TEXT_RE).first,
         ]
         for strategy in click_strategies:
             try:
@@ -155,10 +191,10 @@ def _fill_and_maybe_submit(page, submit: bool, url: str) -> bool:
 
     if not opened:
         raise RuntimeError(
-            "Could not find/open the 'Bestil fremvisning' booking dialog trigger on the page."
+            "Could not find/open the booking dialog trigger ('Book fremvisning') on the page."
         )
 
-    dialog = page.get_by_role("dialog", name=re.compile("Bestil fremvisning", re.IGNORECASE))
+    dialog = page.get_by_role("dialog", name=BOOKING_TEXT_RE)
     dialog.wait_for(state="visible", timeout=10000)
 
     # Fill by visible label text, scoped to the dialog - robust to
@@ -188,11 +224,9 @@ def _fill_and_maybe_submit(page, submit: bool, url: str) -> bool:
         return True
 
     submitted = False
-    for label in ["Send", "Bestil fremvisning", "Submit"]:
+    for label_re in [re.compile("Send", re.IGNORECASE), BOOKING_TEXT_RE, re.compile("Submit", re.IGNORECASE)]:
         try:
-            dialog.get_by_role("button", name=re.compile(label, re.IGNORECASE)).last.click(
-                timeout=5000
-            )
+            dialog.get_by_role("button", name=label_re).last.click(timeout=5000)
             submitted = True
             break
         except Exception:
