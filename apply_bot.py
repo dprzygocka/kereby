@@ -106,10 +106,13 @@ def send_email(subject: str, body: str) -> None:
     print(f"[email] sent: {subject}")
 
 
-def apply_to_listing(url: str) -> bool:
-    """Open the listing page in a headless browser and submit the
-    'Book fremvisning' viewing-request form. Returns True on apparent
-    success."""
+def apply_to_listing(url: str, submit: bool = True) -> bool:
+    """Open the listing page in a headless browser and fill (and, if
+    submit=True, send) the 'Book fremvisning' viewing-request form.
+    Returns True on apparent success. When submit=False, fills the form,
+    screenshots it, and stops WITHOUT clicking send -- used for testing
+    the field-matching logic against a real listing without actually
+    applying to it."""
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
@@ -136,6 +139,14 @@ def apply_to_listing(url: str) -> bool:
         except Exception:
             print("[apply] no checkbox found/needed")
 
+        if not submit:
+            # Test mode: prove the fields were found & filled, but do not send.
+            screenshot_path = f"/tmp/preview_{re.sub(r'[^a-zA-Z0-9]', '_', url)[-40:]}.png"
+            page.screenshot(path=screenshot_path, full_page=True)
+            print(f"[apply] TEST MODE - form filled but NOT submitted. Screenshot: {screenshot_path}")
+            browser.close()
+            return True
+
         submitted = False
         for label in ["Send", "Book fremvisning", "Submit"]:
             try:
@@ -155,6 +166,18 @@ def apply_to_listing(url: str) -> bool:
 
 
 def main():
+    test_url = os.environ.get("TEST_URL", "").strip()
+    if test_url:
+        # Manual test: fill the form on a real listing WITHOUT submitting,
+        # to verify field-matching works. Triggered via workflow_dispatch input.
+        if not (APPLICANT_NAME and APPLICANT_EMAIL):
+            print("APPLICANT_NAME/APPLICANT_EMAIL are not set.", file=sys.stderr)
+            sys.exit(1)
+        print(f"[test] Filling (not submitting) form at {test_url}")
+        ok = apply_to_listing(test_url, submit=False)
+        print("[test] Form fields were found and filled." if ok else "[test] FAILED to fill form.")
+        return
+
     if AUTO_APPLY and not (APPLICANT_NAME and APPLICANT_EMAIL):
         print("AUTO_APPLY is true but APPLICANT_NAME/APPLICANT_EMAIL are not set.", file=sys.stderr)
         sys.exit(1)
