@@ -120,22 +120,33 @@ def apply_to_listing(url: str, submit: bool = True) -> bool:
         page = browser.new_page()
         page.goto(url, wait_until="networkidle", timeout=30000)
 
-        # The "Book fremvisning" button reveals/scrolls to the form.
-        try:
-            page.get_by_text("Book fremvisning", exact=False).first.click(timeout=5000)
-        except Exception:
-            pass  # form may already be visible on the page
+        # The "Bestil fremvisning" button opens a modal dialog containing the
+        # actual booking form. Scope all field lookups to that dialog so we
+        # don't collide with the separate general-contact form or newsletter
+        # signup fields elsewhere on the page (all of which also have
+        # Navn/Email-ish labels).
+        page.get_by_role("button", name=re.compile("Bestil fremvisning", re.IGNORECASE)).first.click(
+            timeout=10000
+        )
+        dialog = page.get_by_role("dialog", name=re.compile("Bestil fremvisning", re.IGNORECASE))
+        dialog.wait_for(state="visible", timeout=10000)
 
-        # Fill by visible label text - robust to internal field names.
-        page.get_by_label(re.compile("Navn", re.IGNORECASE)).fill(APPLICANT_NAME)
-        page.get_by_label(re.compile("Email", re.IGNORECASE)).fill(APPLICANT_EMAIL)
-        page.get_by_label(re.compile("besked", re.IGNORECASE)).fill(APPLICANT_MESSAGE)
+        # Fill by visible label text, scoped to the dialog - robust to
+        # internal field names/ids.
+        dialog.get_by_label(re.compile("Navn", re.IGNORECASE)).fill(APPLICANT_NAME)
+        dialog.get_by_label(re.compile("Email", re.IGNORECASE)).fill(APPLICANT_EMAIL)
+        try:
+            dialog.get_by_label(re.compile("besked|kommentar|message", re.IGNORECASE)).fill(
+                APPLICANT_MESSAGE
+            )
+        except Exception:
+            print("[apply] no message field found in dialog (may not exist) - continuing")
 
         # NEVER fill the honeypot field ("Udfyld ikke dette felt" = spam trap).
 
-        # Consent checkbox (GDPR).
+        # Consent checkbox (GDPR), if present, scoped to the dialog.
         try:
-            page.get_by_role("checkbox").first.check(timeout=5000)
+            dialog.get_by_role("checkbox").first.check(timeout=5000)
         except Exception:
             print("[apply] no checkbox found/needed")
 
@@ -148,9 +159,9 @@ def apply_to_listing(url: str, submit: bool = True) -> bool:
             return True
 
         submitted = False
-        for label in ["Send", "Book fremvisning", "Submit"]:
+        for label in ["Send", "Bestil fremvisning", "Submit"]:
             try:
-                page.get_by_role("button", name=re.compile(label, re.IGNORECASE)).last.click(
+                dialog.get_by_role("button", name=re.compile(label, re.IGNORECASE)).last.click(
                     timeout=5000
                 )
                 submitted = True
