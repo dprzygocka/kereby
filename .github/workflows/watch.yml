@@ -57,6 +57,7 @@ jobs:
           path: |
             /tmp/confirm_*.png
             /tmp/preview_*.png
+            /tmp/debug_*.png
           if-no-files-found: ignore
           retention-days: 14
 
