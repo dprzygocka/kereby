@@ -5,7 +5,12 @@ on:
     # Every 5 minutes. GitHub's free scheduler does not guarantee exact
     # timing under load -- in practice this often runs every ~10-15 min.
     - cron: "*/5 * * * *"
-  workflow_dispatch: {}   # lets you trigger a run manually from the Actions tab
+  workflow_dispatch:      # lets you trigger a run manually from the Actions tab
+    inputs:
+      test_url:
+        description: "Optional: paste a real listing URL to test the form-fill WITHOUT submitting it"
+        required: false
+        default: ""
 
 permissions:
   contents: write   # needed to commit seen.json back to the repo
@@ -33,6 +38,7 @@ jobs:
         env:
           TARGET_ROOMS: "2"
           AUTO_APPLY: "true"
+          TEST_URL: ${{ github.event.inputs.test_url }}
           APPLICANT_NAME: ${{ secrets.APPLICANT_NAME }}
           APPLICANT_EMAIL: ${{ secrets.APPLICANT_EMAIL }}
           APPLICANT_MESSAGE: ${{ secrets.APPLICANT_MESSAGE }}
@@ -43,12 +49,14 @@ jobs:
           NOTIFY_TO: ${{ secrets.NOTIFY_TO }}
         run: python apply_bot.py
 
-      - name: Upload confirmation screenshots (debugging aid)
+      - name: Upload confirmation/preview screenshots (debugging aid)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: confirmation-screenshots
-          path: /tmp/confirm_*.png
+          name: form-screenshots
+          path: |
+            /tmp/confirm_*.png
+            /tmp/preview_*.png
           if-no-files-found: ignore
           retention-days: 14
 
