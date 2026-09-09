@@ -120,60 +120,88 @@ def apply_to_listing(url: str, submit: bool = True) -> bool:
         page = browser.new_page()
         page.goto(url, wait_until="networkidle", timeout=30000)
 
-        # The "Bestil fremvisning" button opens a modal dialog containing the
-        # actual booking form. Scope all field lookups to that dialog so we
-        # don't collide with the separate general-contact form or newsletter
-        # signup fields elsewhere on the page (all of which also have
-        # Navn/Email-ish labels).
-        page.get_by_role("button", name=re.compile("Bestil fremvisning", re.IGNORECASE)).first.click(
-            timeout=10000
-        )
-        dialog = page.get_by_role("dialog", name=re.compile("Bestil fremvisning", re.IGNORECASE))
-        dialog.wait_for(state="visible", timeout=10000)
-
-        # Fill by visible label text, scoped to the dialog - robust to
-        # internal field names/ids.
-        dialog.get_by_label(re.compile("Navn", re.IGNORECASE)).fill(APPLICANT_NAME)
-        dialog.get_by_label(re.compile("Email", re.IGNORECASE)).fill(APPLICANT_EMAIL)
         try:
-            dialog.get_by_label(re.compile("besked|kommentar|message", re.IGNORECASE)).fill(
-                APPLICANT_MESSAGE
-            )
+            return _fill_and_maybe_submit(page, submit, url)
         except Exception:
-            print("[apply] no message field found in dialog (may not exist) - continuing")
-
-        # NEVER fill the honeypot field ("Udfyld ikke dette felt" = spam trap).
-
-        # Consent checkbox (GDPR), if present, scoped to the dialog.
-        try:
-            dialog.get_by_role("checkbox").first.check(timeout=5000)
-        except Exception:
-            print("[apply] no checkbox found/needed")
-
-        if not submit:
-            # Test mode: prove the fields were found & filled, but do not send.
-            screenshot_path = f"/tmp/preview_{re.sub(r'[^a-zA-Z0-9]', '_', url)[-40:]}.png"
-            page.screenshot(path=screenshot_path, full_page=True)
-            print(f"[apply] TEST MODE - form filled but NOT submitted. Screenshot: {screenshot_path}")
+            debug_path = f"/tmp/debug_{re.sub(r'[^a-zA-Z0-9]', '_', url)[-40:]}.png"
+            page.screenshot(path=debug_path, full_page=True)
+            print(f"[apply] FAILED - saved debug screenshot to {debug_path}")
+            raise
+        finally:
             browser.close()
-            return True
 
-        submitted = False
-        for label in ["Send", "Bestil fremvisning", "Submit"]:
+
+def _fill_and_maybe_submit(page, submit: bool, url: str) -> bool:
+    # The "Bestil fremvisning" trigger might be a <button>, a <div>, or an
+    # <a> depending on the theme markup, so try several locator strategies
+    # rather than assuming one element type.
+    dialog = page.get_by_role("dialog", name=re.compile("Bestil fremvisning", re.IGNORECASE))
+    opened = False
+    if dialog.count() > 0 and dialog.first.is_visible():
+        opened = True  # dialog already present/visible, no click needed
+    else:
+        click_strategies = [
+            lambda: page.get_by_role("button", name=re.compile("Bestil fremvisning", re.IGNORECASE)).first,
+            lambda: page.get_by_role("link", name=re.compile("Bestil fremvisning", re.IGNORECASE)).first,
+            lambda: page.get_by_text(re.compile("Bestil fremvisning", re.IGNORECASE)).first,
+        ]
+        for strategy in click_strategies:
             try:
-                dialog.get_by_role("button", name=re.compile(label, re.IGNORECASE)).last.click(
-                    timeout=5000
-                )
-                submitted = True
+                strategy().click(timeout=7000)
+                opened = True
                 break
             except Exception:
                 continue
 
-        page.wait_for_timeout(3000)  # let any async confirmation render
-        screenshot_path = f"/tmp/confirm_{re.sub(r'[^a-zA-Z0-9]', '_', url)[-40:]}.png"
+    if not opened:
+        raise RuntimeError(
+            "Could not find/open the 'Bestil fremvisning' booking dialog trigger on the page."
+        )
+
+    dialog = page.get_by_role("dialog", name=re.compile("Bestil fremvisning", re.IGNORECASE))
+    dialog.wait_for(state="visible", timeout=10000)
+
+    # Fill by visible label text, scoped to the dialog - robust to
+    # internal field names/ids.
+    dialog.get_by_label(re.compile("Navn", re.IGNORECASE)).fill(APPLICANT_NAME)
+    dialog.get_by_label(re.compile("Email", re.IGNORECASE)).fill(APPLICANT_EMAIL)
+    try:
+        dialog.get_by_label(re.compile("besked|kommentar|message", re.IGNORECASE)).fill(
+            APPLICANT_MESSAGE
+        )
+    except Exception:
+        print("[apply] no message field found in dialog (may not exist) - continuing")
+
+    # NEVER fill the honeypot field ("Udfyld ikke dette felt" = spam trap).
+
+    # Consent checkbox (GDPR), if present, scoped to the dialog.
+    try:
+        dialog.get_by_role("checkbox").first.check(timeout=5000)
+    except Exception:
+        print("[apply] no checkbox found/needed")
+
+    if not submit:
+        # Test mode: prove the fields were found & filled, but do not send.
+        screenshot_path = f"/tmp/preview_{re.sub(r'[^a-zA-Z0-9]', '_', url)[-40:]}.png"
         page.screenshot(path=screenshot_path, full_page=True)
-        browser.close()
-        return submitted
+        print(f"[apply] TEST MODE - form filled but NOT submitted. Screenshot: {screenshot_path}")
+        return True
+
+    submitted = False
+    for label in ["Send", "Bestil fremvisning", "Submit"]:
+        try:
+            dialog.get_by_role("button", name=re.compile(label, re.IGNORECASE)).last.click(
+                timeout=5000
+            )
+            submitted = True
+            break
+        except Exception:
+            continue
+
+    page.wait_for_timeout(3000)  # let any async confirmation render
+    screenshot_path = f"/tmp/confirm_{re.sub(r'[^a-zA-Z0-9]', '_', url)[-40:]}.png"
+    page.screenshot(path=screenshot_path, full_page=True)
+    return submitted
 
 
 def main():
