@@ -214,12 +214,20 @@ def _fill_and_maybe_submit(page, submit: bool, url: str) -> bool:
         except Exception:
             continue
         page.wait_for_timeout(400)
-        time_buttons = dialog.locator("button:not([disabled]):not([aria-disabled='true'])").filter(
-            has_text=time_re
-        )
-        if time_buttons.count() > 0:
-            time_buttons.first.click(timeout=5000)
-            time_selected = True
+        # Time slots may not be real <button> elements, so match by visible
+        # text regardless of tag. Playwright's click() will itself time out
+        # on slots that are visually disabled (pointer-events blocked), so
+        # we just try each candidate and move on if it doesn't take.
+        time_candidates = dialog.get_by_text(time_re, exact=True)
+        tcount = time_candidates.count()
+        for j in range(tcount):
+            try:
+                time_candidates.nth(j).click(timeout=2000)
+                time_selected = True
+                break
+            except Exception:
+                continue
+        if time_selected:
             break
 
     if not time_selected:
