@@ -42,10 +42,10 @@ jobs:
           APPLICANT_NAME: ${{ secrets.APPLICANT_NAME }}
           APPLICANT_EMAIL: ${{ secrets.APPLICANT_EMAIL }}
           APPLICANT_PHONE: ${{ secrets.APPLICANT_PHONE }}
-          APPLICANT_LANGUAGE: ${{ secrets.APPLICANT_LANGUAGE }}
+          APPLICANT_LANGUAGE: ${{ secrets.APPLICANT_LANGUAGE || 'English' }}
           APPLICANT_MESSAGE: ${{ secrets.APPLICANT_MESSAGE }}
-          CONFIRM_NOT_IN_RKI: ${{ secrets.CONFIRM_NOT_IN_RKI }}
-          CONFIRM_NO_PETS: ${{ secrets.CONFIRM_NO_PETS }}
+          CONFIRM_NOT_IN_RKI: ${{ secrets.CONFIRM_NOT_IN_RKI || 'true' }}
+          CONFIRM_NO_PETS: ${{ secrets.CONFIRM_NO_PETS || 'true' }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
