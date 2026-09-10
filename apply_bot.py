@@ -377,37 +377,35 @@ def _fill_and_maybe_submit(page, submit: bool, url: str) -> bool:
     # applicant - only flip them on if CONFIRM_* env vars say they're true. ---
     print("[debug] step 3: setting confirmation toggles")
 
-    # These toggles have no associated <label> Playwright can match (unlike
-    # the step-2 privacy checkbox), so find them by position instead: they
-    # are visible checkbox-style inputs on this step, RKI listed first,
-    # pets listed second.
-    checkboxes = dialog.locator('input[type="checkbox"]:visible')
-    cb_count = checkboxes.count()
-    print(f"[debug] step 3: found {cb_count} visible checkbox-like input(s)")
-    for idx in range(cb_count):
+    # Confirmed markup: <label class="...booking-toggle"><input type="checkbox"
+    # data-index="0">...</label> - no text inside the <label> itself (the
+    # question text is a separate sibling element), which is why get_by_label
+    # found nothing earlier. Target by data-index directly: 0 = RKI, 1 = pets.
+    def _toggle_by_index(index: int, name: str) -> None:
+        el = dialog.locator(f'input[type="checkbox"][data-index="{index}"]')
         try:
-            html = checkboxes.nth(idx).evaluate("el => el.outerHTML")
-            print(f"[debug]   checkbox {idx} markup: {html[:250]}")
-        except Exception:
-            pass
-
-    targets = []
-    if CONFIRM_NOT_IN_RKI and cb_count >= 1:
-        targets.append((0, "RKI"))
-    if CONFIRM_NO_PETS and cb_count >= 2:
-        targets.append((1, "pets"))
-
-    for idx, name in targets:
-        try:
-            checkboxes.nth(idx).check(timeout=5000)
-            print(f"[debug] {name} toggle (idx {idx}): check() succeeded")
+            html = el.evaluate("el => el.outerHTML")
+            print(f"[debug] {name} toggle (data-index={index}) markup: {html[:250]}")
         except Exception as e:
-            print(f"[debug] {name} toggle (idx {idx}): check() failed ({e}); trying forced click")
-            try:
-                checkboxes.nth(idx).click(timeout=3000, force=True)
-                print(f"[debug] {name} toggle (idx {idx}): forced click succeeded")
-            except Exception as e2:
-                print(f"[apply] could not toggle {name}: {e2}")
+            print(f"[debug] {name} toggle (data-index={index}): could not read markup ({e})")
+        try:
+            el.check(timeout=5000)
+            print(f"[debug] {name} toggle: check() succeeded")
+            return
+        except Exception as e:
+            print(f"[debug] {name} toggle: check() failed ({e}); trying forced click on the label")
+        try:
+            # The visible clickable surface is the <label>, not the (possibly
+            # visually hidden) checkbox input itself.
+            el.locator("xpath=ancestor::label[1]").click(timeout=3000)
+            print(f"[debug] {name} toggle: label click succeeded")
+        except Exception as e2:
+            print(f"[apply] could not toggle {name}: {e2}")
+
+    if CONFIRM_NOT_IN_RKI:
+        _toggle_by_index(0, "RKI")
+    if CONFIRM_NO_PETS:
+        _toggle_by_index(1, "pets")
 
     _snapshot(page, url, "3_confirmations_set")
 
