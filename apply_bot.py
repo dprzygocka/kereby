@@ -142,6 +142,17 @@ def apply_to_listing(url: str, submit: bool = True) -> bool:
 BOOKING_TEXT_RE = re.compile("Book fremvisning|Bestil fremvisning", re.IGNORECASE)
 
 
+def _snapshot(page, url: str, tag: str) -> None:
+    """Take a debug screenshot at a named point in the flow, without
+    interrupting execution if it fails."""
+    try:
+        path = f"/tmp/step_{tag}_{re.sub(r'[^a-zA-Z0-9]', '_', url)[-40:]}.png"
+        page.screenshot(path=path, full_page=True)
+        print(f"[debug] screenshot saved: {path}")
+    except Exception as e:
+        print(f"[debug] could not save screenshot for '{tag}': {e}")
+
+
 def _click_next_when_enabled(dialog, page, step_label: str, max_wait_ms: int = 6000) -> None:
     """Click the wizard's 'next step' button. IMPORTANT: the calendar widget
     has its own month-navigation arrow that can ALSO carry an accessible
@@ -302,6 +313,7 @@ def _fill_and_maybe_submit(page, submit: bool, url: str) -> bool:
     if not time_selected:
         raise RuntimeError("Could not find an available time slot on the first enabled date.")
 
+    _snapshot(page, url, "1_date_time_selected")
     _click_next_when_enabled(dialog, page, step_label="date/time -> contact details")
 
     # --- Step 2: contact details (Navn, Email, Telefon, Sprog, Kommentar) +
@@ -351,26 +363,49 @@ def _fill_and_maybe_submit(page, submit: bool, url: str) -> bool:
 
     # Data-processing consent checkbox (GDPR), if present, scoped to the dialog.
     try:
-        dialog.get_by_role("checkbox").first.check(timeout=5000)
-    except Exception:
-        print("[apply] no step-2 checkbox found/needed")
+        checkbox = dialog.get_by_role("checkbox").first
+        checkbox_html = checkbox.evaluate("el => el.outerHTML")
+        print(f"[debug] step-2 checkbox markup: {checkbox_html[:200]}")
+        checkbox.check(timeout=5000)
+    except Exception as e:
+        print(f"[apply] no step-2 checkbox found/needed: {e}")
 
+    _snapshot(page, url, "2_contact_details_filled")
     _click_next_when_enabled(dialog, page, step_label="contact details -> confirmations")
 
     # --- Step 3: two confirmation toggles (RKI registration status, pets),
     # then the final booking button. These are factual statements about the
     # applicant - only flip them on if CONFIRM_* env vars say they're true. ---
     print("[debug] step 3: setting confirmation toggles")
+
+    def _debug_and_toggle(label_pattern, name):
+        try:
+            el = dialog.get_by_label(label_pattern)
+            try:
+                html = el.evaluate("el => el.outerHTML")
+                print(f"[debug] {name} toggle markup: {html[:300]}")
+            except Exception:
+                pass
+            try:
+                el.check(timeout=5000)
+                print(f"[debug] {name} toggle: check() succeeded")
+                return
+            except Exception as e:
+                print(f"[debug] {name} toggle: check() failed ({e}); trying a forced click instead")
+            try:
+                el.click(timeout=3000, force=True)
+                print(f"[debug] {name} toggle: forced click succeeded")
+            except Exception as e2:
+                print(f"[apply] could not toggle {name}: {e2}")
+        except Exception as e:
+            print(f"[apply] could not find {name} toggle: {e}")
+
     if CONFIRM_NOT_IN_RKI:
-        try:
-            dialog.get_by_label(re.compile("RKI", re.IGNORECASE)).check(timeout=5000)
-        except Exception as e:
-            print(f"[apply] could not check RKI confirmation toggle: {e}")
+        _debug_and_toggle(re.compile("RKI", re.IGNORECASE), "RKI")
     if CONFIRM_NO_PETS:
-        try:
-            dialog.get_by_label(re.compile("kæledyr|pets", re.IGNORECASE)).check(timeout=5000)
-        except Exception as e:
-            print(f"[apply] could not check pets confirmation toggle: {e}")
+        _debug_and_toggle(re.compile("kæledyr|pets", re.IGNORECASE), "pets")
+
+    _snapshot(page, url, "3_confirmations_set")
 
     if not submit:
         # Test mode: prove every field/toggle across all 3 steps was found &
