@@ -168,37 +168,68 @@ def _fill_and_maybe_submit(page, submit: bool, url: str) -> bool:
     _dismiss_cookie_banner(page)
     page.wait_for_timeout(500)  # let the banner's exit animation/removal settle
 
-    # The booking trigger might be a <button>, a <div>, or an
-    # <a> depending on the theme markup, so try several locator strategies
-    # rather than assuming one element type.
-    dialog = page.get_by_role("dialog", name=BOOKING_TEXT_RE)
+    # Step 1: open the "Fremvisning" booking wizard. The trigger might be a
+    # <button>, a <div>, or an <a> depending on the theme markup, and there
+    # are TWO "Book fremvisning" elements on the page (one near the top
+    # summary, one in the bottom "Interesseret?" section) - either should
+    # open the same wizard, so .first is fine.
+    click_strategies = [
+        lambda: page.get_by_role("button", name=BOOKING_TEXT_RE).first,
+        lambda: page.get_by_role("link", name=BOOKING_TEXT_RE).first,
+        lambda: page.get_by_text(BOOKING_TEXT_RE).first,
+    ]
     opened = False
-    if dialog.count() > 0 and dialog.first.is_visible():
-        opened = True  # dialog already present/visible, no click needed
-    else:
-        click_strategies = [
-            lambda: page.get_by_role("button", name=BOOKING_TEXT_RE).first,
-            lambda: page.get_by_role("link", name=BOOKING_TEXT_RE).first,
-            lambda: page.get_by_text(BOOKING_TEXT_RE).first,
-        ]
-        for strategy in click_strategies:
-            try:
-                strategy().click(timeout=7000)
-                opened = True
-                break
-            except Exception:
-                continue
-
+    for strategy in click_strategies:
+        try:
+            strategy().click(timeout=7000)
+            opened = True
+            break
+        except Exception:
+            continue
     if not opened:
-        raise RuntimeError(
-            "Could not find/open the booking dialog trigger ('Book fremvisning') on the page."
-        )
+        raise RuntimeError("Could not find/open the booking wizard trigger ('Book fremvisning').")
 
-    dialog = page.get_by_role("dialog", name=BOOKING_TEXT_RE)
+    # Once open, there should be exactly one dialog on the page (the cookie
+    # banner is already dismissed/removed from the a11y tree by this point).
+    dialog = page.get_by_role("dialog").first
     dialog.wait_for(state="visible", timeout=10000)
 
-    # Fill by visible label text, scoped to the dialog - robust to
-    # internal field names/ids.
+    # Step 2: the wizard's first screen is a date/time picker ("Ønsket
+    # fremvisningsdato" / "Ønsket fremvisningstidspunkt") - a date must be
+    # picked, then a time slot, before "Næste" (Next) reveals the contact
+    # fields. Try successive calendar days until one has an available time
+    # slot (some dates may be fully booked).
+    day_buttons = dialog.locator("button:not([disabled]):not([aria-disabled='true'])").filter(
+        has_text=re.compile(r"^\d{1,2}$")
+    )
+    day_count = day_buttons.count()
+    if day_count == 0:
+        raise RuntimeError("No selectable calendar dates found in the booking wizard.")
+
+    time_re = re.compile(r"^\d{1,2}:\d{2}$")
+    time_selected = False
+    for i in range(min(day_count, 10)):  # don't loop forever
+        try:
+            day_buttons.nth(i).click(timeout=5000)
+        except Exception:
+            continue
+        page.wait_for_timeout(400)
+        time_buttons = dialog.locator("button:not([disabled]):not([aria-disabled='true'])").filter(
+            has_text=time_re
+        )
+        if time_buttons.count() > 0:
+            time_buttons.first.click(timeout=5000)
+            time_selected = True
+            break
+
+    if not time_selected:
+        raise RuntimeError("Could not find an available time slot on any selectable date.")
+
+    page.wait_for_timeout(300)
+    dialog.get_by_role("button", name=re.compile("Næste|Next", re.IGNORECASE)).first.click(timeout=5000)
+    page.wait_for_timeout(500)
+
+    # Step 3: contact details, now revealed after Næste.
     dialog.get_by_label(re.compile("Navn", re.IGNORECASE)).fill(APPLICANT_NAME)
     dialog.get_by_label(re.compile("Email", re.IGNORECASE)).fill(APPLICANT_EMAIL)
     try:
