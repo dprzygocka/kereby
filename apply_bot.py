@@ -217,14 +217,14 @@ def _fill_and_maybe_submit(page, submit: bool, url: str) -> bool:
     time_re = re.compile(r"^\d{1,2}:\d{2}$")
     time_selected = False
     print(f"[debug] found {day_count} selectable calendar day(s)")
-    for i in range(min(day_count, 10)):  # don't loop forever
+    for i in range(day_count):  # try every day in the grid, not just the first 10
         try:
             day_html = day_buttons.nth(i).evaluate("el => el.outerHTML")
             print(f"[debug] day idx {i} markup: {day_html[:200]}")
         except Exception:
             pass
         try:
-            day_buttons.nth(i).click(timeout=5000)
+            day_buttons.nth(i).click(timeout=1500)  # short timeout - disabled days should fail fast
         except Exception as e:
             print(f"[debug] day idx {i}: click failed ({e})")
             continue
