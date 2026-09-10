@@ -142,6 +142,34 @@ def apply_to_listing(url: str, submit: bool = True) -> bool:
 BOOKING_TEXT_RE = re.compile("Book fremvisning|Bestil fremvisning", re.IGNORECASE)
 
 
+def _click_next_when_enabled(dialog, page, step_label: str, max_wait_ms: int = 6000) -> None:
+    """Click the wizard's 'Næste'/'Next' button, but first poll until it's
+    actually enabled - clicking it while still disabled (e.g. right after a
+    selection the site's JS hasn't finished registering) is a silent no-op
+    that leaves the wizard stuck on the current step."""
+    next_button = dialog.get_by_role("button", name=re.compile("Næste|Next", re.IGNORECASE)).first
+    next_button.wait_for(state="visible", timeout=10000)
+
+    waited = 0
+    is_disabled = True
+    while waited < max_wait_ms:
+        try:
+            is_disabled = next_button.evaluate(
+                "el => el.disabled === true || el.getAttribute('aria-disabled') === 'true' "
+                "|| el.classList.contains('disabled')"
+            )
+        except Exception:
+            is_disabled = False
+        if not is_disabled:
+            break
+        page.wait_for_timeout(250)
+        waited += 250
+
+    print(f"[debug] [{step_label}] Næste button disabled={is_disabled} after {waited}ms wait")
+    next_button.click(timeout=5000)
+    page.wait_for_timeout(600)
+
+
 def _dismiss_cookie_banner(page) -> None:
     """Best-effort dismissal of the Cookiebot consent banner that overlays
     the page on first load and can block clicks on elements underneath it."""
@@ -258,14 +286,22 @@ def _fill_and_maybe_submit(page, submit: bool, url: str) -> bool:
     if not time_selected:
         raise RuntimeError("Could not find an available time slot on the first enabled date.")
 
-    page.wait_for_timeout(300)
-    dialog.get_by_role("button", name=re.compile("Næste|Next", re.IGNORECASE)).first.click(timeout=5000)
-    page.wait_for_timeout(500)
+    _click_next_when_enabled(dialog, page, step_label="date/time -> contact details")
 
     # --- Step 2: contact details (Navn, Email, Telefon, Sprog, Kommentar) +
     # data-processing consent checkbox, revealed after the first "Næste". ---
     print("[debug] step 2: filling contact details")
-    dialog.get_by_label(re.compile("Navn", re.IGNORECASE)).fill(APPLICANT_NAME)
+    navn_field = dialog.get_by_label(re.compile("Navn", re.IGNORECASE))
+    try:
+        navn_field.wait_for(state="visible", timeout=10000)
+    except Exception:
+        try:
+            dialog_html = dialog.evaluate("el => el.outerHTML")
+        except Exception:
+            dialog_html = "<could not read dialog HTML>"
+        print(f"[debug] Navn field never became visible. Current dialog HTML:\n{dialog_html[:3000]}")
+        raise
+    navn_field.fill(APPLICANT_NAME)
     dialog.get_by_label(re.compile("Email", re.IGNORECASE)).fill(APPLICANT_EMAIL)
 
     if APPLICANT_PHONE:
@@ -303,8 +339,7 @@ def _fill_and_maybe_submit(page, submit: bool, url: str) -> bool:
     except Exception:
         print("[apply] no step-2 checkbox found/needed")
 
-    dialog.get_by_role("button", name=re.compile("Næste|Next", re.IGNORECASE)).first.click(timeout=5000)
-    page.wait_for_timeout(500)
+    _click_next_when_enabled(dialog, page, step_label="contact details -> confirmations")
 
     # --- Step 3: two confirmation toggles (RKI registration status, pets),
     # then the final booking button. These are factual statements about the
