@@ -35,10 +35,18 @@ AUTO_APPLY = os.environ.get("AUTO_APPLY", "false").lower() == "true"
 
 APPLICANT_NAME = os.environ.get("APPLICANT_NAME", "")
 APPLICANT_EMAIL = os.environ.get("APPLICANT_EMAIL", "")
+APPLICANT_PHONE = os.environ.get("APPLICANT_PHONE", "")
+APPLICANT_LANGUAGE = os.environ.get("APPLICANT_LANGUAGE", "English")  # "English" or "Dansk"
 APPLICANT_MESSAGE = os.environ.get(
     "APPLICANT_MESSAGE",
     "Hej, jeg er meget interesseret i denne bolig og vil gerne booke en fremvisning. Mvh",
 )
+
+# These two must reflect the truth about the applicant - the booking wizard's
+# final step has the applicant explicitly confirm both. Do not flip these to
+# "true" unless they are actually true for you.
+CONFIRM_NOT_IN_RKI = os.environ.get("CONFIRM_NOT_IN_RKI", "true").lower() == "true"
+CONFIRM_NO_PETS = os.environ.get("CONFIRM_NO_PETS", "true").lower() == "true"
 
 SMTP_HOST = os.environ.get("SMTP_HOST", "")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
@@ -208,24 +216,39 @@ def _fill_and_maybe_submit(page, submit: bool, url: str) -> bool:
 
     time_re = re.compile(r"^\d{1,2}:\d{2}$")
     time_selected = False
+    print(f"[debug] found {day_count} selectable calendar day(s)")
     for i in range(min(day_count, 10)):  # don't loop forever
         try:
-            day_buttons.nth(i).click(timeout=5000)
+            day_html = day_buttons.nth(i).evaluate("el => el.outerHTML")
+            print(f"[debug] day idx {i} markup: {day_html[:200]}")
         except Exception:
+            pass
+        try:
+            day_buttons.nth(i).click(timeout=5000)
+        except Exception as e:
+            print(f"[debug] day idx {i}: click failed ({e})")
             continue
-        page.wait_for_timeout(400)
+        page.wait_for_timeout(600)
         # Time slots may not be real <button> elements, so match by visible
         # text regardless of tag. Playwright's click() will itself time out
         # on slots that are visually disabled (pointer-events blocked), so
         # we just try each candidate and move on if it doesn't take.
         time_candidates = dialog.get_by_text(time_re, exact=True)
         tcount = time_candidates.count()
+        print(f"[debug] day idx {i}: found {tcount} time-slot element(s)")
         for j in range(tcount):
+            try:
+                html = time_candidates.nth(j).evaluate("el => el.outerHTML")
+                print(f"[debug]   slot {j} markup: {html[:250]}")
+            except Exception as e:
+                print(f"[debug]   slot {j}: could not read markup ({e})")
             try:
                 time_candidates.nth(j).click(timeout=2000)
                 time_selected = True
+                print(f"[debug]   slot {j}: click SUCCEEDED")
                 break
-            except Exception:
+            except Exception as e:
+                print(f"[debug]   slot {j}: click failed ({e})")
                 continue
         if time_selected:
             break
@@ -237,11 +260,34 @@ def _fill_and_maybe_submit(page, submit: bool, url: str) -> bool:
     dialog.get_by_role("button", name=re.compile("Næste|Next", re.IGNORECASE)).first.click(timeout=5000)
     page.wait_for_timeout(500)
 
-    # Step 3: contact details, now revealed after Næste.
+    # --- Step 2: contact details (Navn, Email, Telefon, Sprog, Kommentar) +
+    # data-processing consent checkbox, revealed after the first "Næste". ---
+    print("[debug] step 2: filling contact details")
     dialog.get_by_label(re.compile("Navn", re.IGNORECASE)).fill(APPLICANT_NAME)
     dialog.get_by_label(re.compile("Email", re.IGNORECASE)).fill(APPLICANT_EMAIL)
+
+    if APPLICANT_PHONE:
+        try:
+            dialog.get_by_label(re.compile("Telefon|Phone|Mobil", re.IGNORECASE)).fill(APPLICANT_PHONE)
+        except Exception as e:
+            print(f"[apply] could not fill phone field: {e}")
+
+    # Language may be a native <select> or a custom dropdown - try both.
     try:
-        dialog.get_by_label(re.compile("besked|kommentar|message", re.IGNORECASE)).fill(
+        lang_field = dialog.get_by_label(re.compile("Sprog|Language", re.IGNORECASE))
+        try:
+            lang_field.select_option(label=re.compile(APPLICANT_LANGUAGE, re.IGNORECASE))
+        except Exception:
+            # Custom dropdown fallback: click to open, then click the option text.
+            lang_field.click(timeout=3000)
+            dialog.get_by_text(re.compile(f"^{APPLICANT_LANGUAGE}$", re.IGNORECASE)).first.click(
+                timeout=3000
+            )
+    except Exception as e:
+        print(f"[apply] could not set language field: {e}")
+
+    try:
+        dialog.get_by_label(re.compile("besked|kommentar|comment|message", re.IGNORECASE)).fill(
             APPLICANT_MESSAGE
         )
     except Exception:
@@ -249,21 +295,46 @@ def _fill_and_maybe_submit(page, submit: bool, url: str) -> bool:
 
     # NEVER fill the honeypot field ("Udfyld ikke dette felt" = spam trap).
 
-    # Consent checkbox (GDPR), if present, scoped to the dialog.
+    # Data-processing consent checkbox (GDPR), if present, scoped to the dialog.
     try:
         dialog.get_by_role("checkbox").first.check(timeout=5000)
     except Exception:
-        print("[apply] no checkbox found/needed")
+        print("[apply] no step-2 checkbox found/needed")
+
+    dialog.get_by_role("button", name=re.compile("Næste|Next", re.IGNORECASE)).first.click(timeout=5000)
+    page.wait_for_timeout(500)
+
+    # --- Step 3: two confirmation toggles (RKI registration status, pets),
+    # then the final booking button. These are factual statements about the
+    # applicant - only flip them on if CONFIRM_* env vars say they're true. ---
+    print("[debug] step 3: setting confirmation toggles")
+    if CONFIRM_NOT_IN_RKI:
+        try:
+            dialog.get_by_label(re.compile("RKI", re.IGNORECASE)).check(timeout=5000)
+        except Exception as e:
+            print(f"[apply] could not check RKI confirmation toggle: {e}")
+    if CONFIRM_NO_PETS:
+        try:
+            dialog.get_by_label(re.compile("kæledyr|pets", re.IGNORECASE)).check(timeout=5000)
+        except Exception as e:
+            print(f"[apply] could not check pets confirmation toggle: {e}")
 
     if not submit:
-        # Test mode: prove the fields were found & filled, but do not send.
+        # Test mode: prove every field/toggle across all 3 steps was found &
+        # set correctly, but stop here WITHOUT clicking the final booking button.
         screenshot_path = f"/tmp/preview_{re.sub(r'[^a-zA-Z0-9]', '_', url)[-40:]}.png"
         page.screenshot(path=screenshot_path, full_page=True)
-        print(f"[apply] TEST MODE - form filled but NOT submitted. Screenshot: {screenshot_path}")
+        print(f"[apply] TEST MODE - all steps filled but NOT submitted. Screenshot: {screenshot_path}")
         return True
 
     submitted = False
-    for label_re in [re.compile("Send", re.IGNORECASE), BOOKING_TEXT_RE, re.compile("Submit", re.IGNORECASE)]:
+    for label_re in [
+        re.compile("Book", re.IGNORECASE),
+        re.compile("Bekræft", re.IGNORECASE),
+        re.compile("Send", re.IGNORECASE),
+        BOOKING_TEXT_RE,
+        re.compile("Godkend|Afslut|Submit", re.IGNORECASE),
+    ]:
         try:
             dialog.get_by_role("button", name=label_re).last.click(timeout=5000)
             submitted = True
