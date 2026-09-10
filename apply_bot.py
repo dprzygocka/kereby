@@ -338,17 +338,16 @@ def _fill_and_maybe_submit(page, submit: bool, url: str) -> bool:
         except Exception as e:
             print(f"[apply] could not fill phone field: {e}")
 
-    # Language may be a native <select> or a custom dropdown - try both.
+    # Language is a native <select> (option values are lowercase language
+    # codes like "english"/"dansk") - select_option() needs a plain string,
+    # not a regex, and clicking hidden <option> elements directly (as a
+    # fallback) never works for native selects, so don't attempt that.
     try:
         lang_field = dialog.get_by_label(re.compile("Sprog|Language", re.IGNORECASE))
         try:
-            lang_field.select_option(label=re.compile(APPLICANT_LANGUAGE, re.IGNORECASE))
+            lang_field.select_option(value=APPLICANT_LANGUAGE.lower())
         except Exception:
-            # Custom dropdown fallback: click to open, then click the option text.
-            lang_field.click(timeout=3000)
-            dialog.get_by_text(re.compile(f"^{APPLICANT_LANGUAGE}$", re.IGNORECASE)).first.click(
-                timeout=3000
-            )
+            lang_field.select_option(label=APPLICANT_LANGUAGE)
     except Exception as e:
         print(f"[apply] could not set language field: {e}")
 
