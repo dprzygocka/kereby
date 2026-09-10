@@ -207,54 +207,56 @@ def _fill_and_maybe_submit(page, submit: bool, url: str) -> bool:
     # picked, then a time slot, before "Næste" (Next) reveals the contact
     # fields. Try successive calendar days until one has an available time
     # slot (some dates may be fully booked).
-    day_buttons = dialog.locator("button:not([disabled]):not([aria-disabled='true'])").filter(
-        has_text=re.compile(r"^\d{1,2}$")
-    )
-    day_count = day_buttons.count()
-    if day_count == 0:
-        raise RuntimeError("No selectable calendar dates found in the booking wizard.")
+    # Query enabled calendar days precisely via the Pikaday "is-disabled"
+    # class on the day's <td> (seen in earlier debug logs), rather than
+    # trial-and-error clicking every day - which risked misfiring on
+    # adjacent elements (month-nav arrows etc.) and landing on the wrong date.
+    enabled_days = dialog.locator("td:not(.is-disabled) button.pika-day")
+    day_count = enabled_days.count()
 
-    time_re = re.compile(r"^\d{1,2}:\d{2}$")
-    time_selected = False
-    print(f"[debug] found {day_count} selectable calendar day(s)")
-    for i in range(day_count):  # try every day in the grid, not just the first 10
+    if day_count == 0:
+        # Current month may be fully booked/past - advance to next month once.
         try:
-            day_html = day_buttons.nth(i).evaluate("el => el.outerHTML")
-            print(f"[debug] day idx {i} markup: {day_html[:200]}")
-        except Exception:
-            pass
-        try:
-            day_buttons.nth(i).click(timeout=1500)  # short timeout - disabled days should fail fast
+            dialog.locator(".pika-next, [aria-label='Next Month']").first.click(timeout=3000)
+            page.wait_for_timeout(500)
+            enabled_days = dialog.locator("td:not(.is-disabled) button.pika-day")
+            day_count = enabled_days.count()
         except Exception as e:
-            print(f"[debug] day idx {i}: click failed ({e})")
-            continue
-        page.wait_for_timeout(600)
-        # Time slots may not be real <button> elements, so match by visible
-        # text regardless of tag. Playwright's click() will itself time out
-        # on slots that are visually disabled (pointer-events blocked), so
-        # we just try each candidate and move on if it doesn't take.
-        time_candidates = dialog.get_by_text(time_re, exact=True)
-        tcount = time_candidates.count()
-        print(f"[debug] day idx {i}: found {tcount} time-slot element(s)")
-        for j in range(tcount):
-            try:
-                html = time_candidates.nth(j).evaluate("el => el.outerHTML")
-                print(f"[debug]   slot {j} markup: {html[:250]}")
-            except Exception as e:
-                print(f"[debug]   slot {j}: could not read markup ({e})")
-            try:
-                time_candidates.nth(j).click(timeout=2000)
-                time_selected = True
-                print(f"[debug]   slot {j}: click SUCCEEDED")
-                break
-            except Exception as e:
-                print(f"[debug]   slot {j}: click failed ({e})")
-                continue
-        if time_selected:
+            print(f"[debug] could not advance to next month: {e}")
+
+    if day_count == 0:
+        raise RuntimeError("No enabled calendar dates found, even after trying the next month.")
+
+    day_html = enabled_days.first.evaluate("el => el.outerHTML")
+    print(f"[debug] {day_count} enabled day(s) found; selecting first: {day_html[:200]}")
+    enabled_days.first.click(timeout=5000)
+    page.wait_for_timeout(600)
+
+    # Time slots may not be real <button> elements, so match by visible
+    # text. Playwright's click() will time out on slots that are visually
+    # disabled (pointer-events blocked), so try each candidate in turn.
+    time_re = re.compile(r"^\d{1,2}:\d{2}$")
+    time_candidates = dialog.get_by_text(time_re, exact=True)
+    tcount = time_candidates.count()
+    print(f"[debug] found {tcount} time-slot element(s) on the selected day")
+    time_selected = False
+    for j in range(tcount):
+        try:
+            html = time_candidates.nth(j).evaluate("el => el.outerHTML")
+            print(f"[debug]   slot {j} markup: {html[:250]}")
+        except Exception as e:
+            print(f"[debug]   slot {j}: could not read markup ({e})")
+        try:
+            time_candidates.nth(j).click(timeout=2000)
+            time_selected = True
+            print(f"[debug]   slot {j}: click SUCCEEDED")
             break
+        except Exception as e:
+            print(f"[debug]   slot {j}: click failed ({e})")
+            continue
 
     if not time_selected:
-        raise RuntimeError("Could not find an available time slot on any selectable date.")
+        raise RuntimeError("Could not find an available time slot on the first enabled date.")
 
     page.wait_for_timeout(300)
     dialog.get_by_role("button", name=re.compile("Næste|Next", re.IGNORECASE)).first.click(timeout=5000)
