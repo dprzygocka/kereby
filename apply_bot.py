@@ -143,12 +143,28 @@ BOOKING_TEXT_RE = re.compile("Book fremvisning|Bestil fremvisning", re.IGNORECAS
 
 
 def _click_next_when_enabled(dialog, page, step_label: str, max_wait_ms: int = 6000) -> None:
-    """Click the wizard's 'Næste'/'Next' button, but first poll until it's
-    actually enabled - clicking it while still disabled (e.g. right after a
-    selection the site's JS hasn't finished registering) is a silent no-op
-    that leaves the wizard stuck on the current step."""
-    next_button = dialog.get_by_role("button", name=re.compile("Næste|Next", re.IGNORECASE)).first
+    """Click the wizard's 'next step' button. IMPORTANT: the calendar widget
+    has its own month-navigation arrow that can ALSO carry an accessible
+    name of 'Næste', so matching by role+name alone risks clicking that
+    instead of actually advancing the wizard. The site's markup uses a
+    consistent data-jorato-booking-* attribute convention, so prefer a
+    data-jorato-booking-next attribute if present; fall back to the LAST
+    (not first) "Næste"-named button, since the wizard's real button sits
+    after the calendar in DOM order."""
+    next_by_attr = dialog.locator("[data-jorato-booking-next]:visible")
+    if next_by_attr.count() > 0:
+        next_button = next_by_attr.first
+        print(f"[debug] [{step_label}] using data-jorato-booking-next attribute selector (visible one)")
+    else:
+        next_button = dialog.get_by_role("button", name=re.compile("Næste|Next", re.IGNORECASE)).last
+        print(f"[debug] [{step_label}] no data-jorato-booking-next found, falling back to last 'Næste' button")
+
     next_button.wait_for(state="visible", timeout=10000)
+    try:
+        html = next_button.evaluate("el => el.outerHTML")
+        print(f"[debug] [{step_label}] next-button markup: {html[:200]}")
+    except Exception:
+        pass
 
     waited = 0
     is_disabled = True
