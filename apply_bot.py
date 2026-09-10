@@ -377,32 +377,37 @@ def _fill_and_maybe_submit(page, submit: bool, url: str) -> bool:
     # applicant - only flip them on if CONFIRM_* env vars say they're true. ---
     print("[debug] step 3: setting confirmation toggles")
 
-    def _debug_and_toggle(label_pattern, name):
+    # These toggles have no associated <label> Playwright can match (unlike
+    # the step-2 privacy checkbox), so find them by position instead: they
+    # are visible checkbox-style inputs on this step, RKI listed first,
+    # pets listed second.
+    checkboxes = dialog.locator('input[type="checkbox"]:visible')
+    cb_count = checkboxes.count()
+    print(f"[debug] step 3: found {cb_count} visible checkbox-like input(s)")
+    for idx in range(cb_count):
         try:
-            el = dialog.get_by_label(label_pattern)
+            html = checkboxes.nth(idx).evaluate("el => el.outerHTML")
+            print(f"[debug]   checkbox {idx} markup: {html[:250]}")
+        except Exception:
+            pass
+
+    targets = []
+    if CONFIRM_NOT_IN_RKI and cb_count >= 1:
+        targets.append((0, "RKI"))
+    if CONFIRM_NO_PETS and cb_count >= 2:
+        targets.append((1, "pets"))
+
+    for idx, name in targets:
+        try:
+            checkboxes.nth(idx).check(timeout=5000)
+            print(f"[debug] {name} toggle (idx {idx}): check() succeeded")
+        except Exception as e:
+            print(f"[debug] {name} toggle (idx {idx}): check() failed ({e}); trying forced click")
             try:
-                html = el.evaluate("el => el.outerHTML")
-                print(f"[debug] {name} toggle markup: {html[:300]}")
-            except Exception:
-                pass
-            try:
-                el.check(timeout=5000)
-                print(f"[debug] {name} toggle: check() succeeded")
-                return
-            except Exception as e:
-                print(f"[debug] {name} toggle: check() failed ({e}); trying a forced click instead")
-            try:
-                el.click(timeout=3000, force=True)
-                print(f"[debug] {name} toggle: forced click succeeded")
+                checkboxes.nth(idx).click(timeout=3000, force=True)
+                print(f"[debug] {name} toggle (idx {idx}): forced click succeeded")
             except Exception as e2:
                 print(f"[apply] could not toggle {name}: {e2}")
-        except Exception as e:
-            print(f"[apply] could not find {name} toggle: {e}")
-
-    if CONFIRM_NOT_IN_RKI:
-        _debug_and_toggle(re.compile("RKI", re.IGNORECASE), "RKI")
-    if CONFIRM_NO_PETS:
-        _debug_and_toggle(re.compile("kæledyr|pets", re.IGNORECASE), "pets")
 
     _snapshot(page, url, "3_confirmations_set")
 
