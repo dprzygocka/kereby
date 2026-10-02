@@ -2,15 +2,26 @@ name: Watch Kereby listings
 
 on:
   schedule:
-    # Every 5 minutes. GitHub's free scheduler does not guarantee exact
+    # Kept as a fallback in case the external pinger (see README) ever
+    # stops working. GitHub's free scheduler does not guarantee exact
     # timing under load -- in practice this often runs every ~10-15 min.
     - cron: "*/5 * * * *"
+  repository_dispatch:
+    # Triggered by an external scheduler (e.g. cron-job.org) hitting
+    # GitHub's API every ~1 minute - see README for setup. This path starts
+    # near-instantly, unlike the queued/delayed built-in cron above.
+    types: [poll]
   workflow_dispatch:      # lets you trigger a run manually from the Actions tab
     inputs:
       test_url:
         description: "Optional: paste a real listing URL to test the form-fill WITHOUT submitting it"
         required: false
         default: ""
+      test_submit:
+        description: "DANGER: set true to actually submit the test_url application for real (books a real viewing)"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write   # needed to commit seen.json back to the repo
@@ -39,6 +50,7 @@ jobs:
           TARGET_ROOMS: "2"
           AUTO_APPLY: "true"
           TEST_URL: ${{ github.event.inputs.test_url }}
+          TEST_SUBMIT: ${{ github.event.inputs.test_submit }}
           APPLICANT_NAME: ${{ secrets.APPLICANT_NAME }}
           APPLICANT_EMAIL: ${{ secrets.APPLICANT_EMAIL }}
           APPLICANT_PHONE: ${{ secrets.APPLICANT_PHONE }}
