@@ -419,10 +419,10 @@ def _fill_and_maybe_submit(page, submit: bool, url: str) -> bool:
 
     submitted = False
     for label_re in [
-        re.compile("Book", re.IGNORECASE),
+        BOOKING_TEXT_RE,  # confirmed correct: "Bestil fremvisning"
         re.compile("Bekræft", re.IGNORECASE),
         re.compile("Send", re.IGNORECASE),
-        BOOKING_TEXT_RE,
+        re.compile("Book", re.IGNORECASE),
         re.compile("Godkend|Afslut|Submit", re.IGNORECASE),
     ]:
         try:
@@ -440,15 +440,32 @@ def _fill_and_maybe_submit(page, submit: bool, url: str) -> bool:
 
 def main():
     test_url = os.environ.get("TEST_URL", "").strip()
+    test_submit = os.environ.get("TEST_SUBMIT", "false").lower() == "true"
     if test_url:
-        # Manual test: fill the form on a real listing WITHOUT submitting,
-        # to verify field-matching works. Triggered via workflow_dispatch input.
+        # Manual test against a specific listing, triggered via
+        # workflow_dispatch inputs. By default this only fills the form
+        # (submit=False) - set TEST_SUBMIT=true to actually click the final
+        # "Bestil fremvisning" button and really book a viewing + send the
+        # confirmation email for this one URL.
         if not (APPLICANT_NAME and APPLICANT_EMAIL):
             print("APPLICANT_NAME/APPLICANT_EMAIL are not set.", file=sys.stderr)
             sys.exit(1)
-        print(f"[test] Filling (not submitting) form at {test_url}")
-        ok = apply_to_listing(test_url, submit=False)
-        print("[test] Form fields were found and filled." if ok else "[test] FAILED to fill form.")
+        mode = "Submitting FOR REAL" if test_submit else "Filling (not submitting)"
+        print(f"[test] {mode} form at {test_url}")
+        try:
+            ok = apply_to_listing(test_url, submit=test_submit)
+        except Exception as e:
+            ok = False
+            print(f"[test] ERROR: {e}")
+        if test_submit:
+            status = "Applied for viewing" if ok else "Could NOT confirm the form submitted"
+            print(f"[test] {status}.")
+            send_email(
+                subject=f"[Kereby TEST] {status}: {test_url}",
+                body=f"{status}.\n\nListing: {test_url}\n(manual test run)",
+            )
+        else:
+            print("[test] Form fields were found and filled." if ok else "[test] FAILED to fill form.")
         return
 
     if AUTO_APPLY and not (APPLICANT_NAME and APPLICANT_EMAIL):
