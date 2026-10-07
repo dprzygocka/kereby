@@ -5,7 +5,10 @@ on:
     # Kept as a fallback in case the external pinger (see README) ever
     # stops working. GitHub's free scheduler does not guarantee exact
     # timing under load -- in practice this often runs every ~10-15 min.
-    - cron: "*/5 * * * *"
+    # GitHub cron is always UTC. 06:00-16:59 UTC = 07:00-17:59 Copenhagen
+    # in winter (CET, UTC+1). In summer (CEST, UTC+2) it shifts to 08:00-18:59;
+    # change to "5-15" for 07:00-17:59 during summer time.
+    - cron: "*/5 6-16 * * *"
   repository_dispatch:
     # Triggered by an external scheduler (e.g. cron-job.org) hitting
     # GitHub's API every ~1 minute - see README for setup. This path starts
@@ -36,16 +39,44 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Fast path: system python3, standard library only - nothing to install.
+      # Sends the "found" email immediately when a new listing exists.
+      - name: Check for new listings (emails if found)
+        id: check
+        env:
+          CHECK_ONLY: "true"
+          TARGET_ROOMS: "2"
+          APPLICANT_EMAIL: ${{ secrets.APPLICANT_EMAIL }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          NOTIFY_TO: ${{ secrets.NOTIFY_TO }}
+        run: python3 apply_bot.py
+
+      # Everything below only runs when there is something to apply to.
       - uses: actions/setup-python@v5
+        if: steps.check.outputs.has_new == 'true' || github.event.inputs.test_url != ''
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
 
-      - name: Install dependencies
+      - name: Cache Playwright browsers
+        if: steps.check.outputs.has_new == 'true' || github.event.inputs.test_url != ''
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
+      - name: Install Playwright + Chromium
+        if: steps.check.outputs.has_new == 'true' || github.event.inputs.test_url != ''
         run: |
           pip install -r requirements.txt
           playwright install --with-deps chromium
 
       - name: Run watcher
+        if: steps.check.outputs.has_new == 'true' || github.event.inputs.test_url != ''
         env:
           TARGET_ROOMS: "2"
           AUTO_APPLY: "true"
