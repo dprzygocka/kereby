@@ -21,11 +21,11 @@ import os
 import re
 import smtplib
 import sys
+import urllib.request
 from email.mime.text import MIMEText
+from html.parser import HTMLParser
 from pathlib import Path
 
-import requests
-from bs4 import BeautifulSoup
 
 LISTING_URL = "https://kereby.dk/bolig/"
 SEEN_FILE = Path(__file__).parent / "seen.json"
@@ -69,17 +69,46 @@ def save_seen(seen: set) -> None:
     SEEN_FILE.write_text(json.dumps(sorted(seen), ensure_ascii=False, indent=2))
 
 
-def fetch_listings():
+class _AnchorCollector(HTMLParser):
+    """Collects (href, visible text) for every <a href=...> using only the
+    standard library, so the quick check needs no pip installs."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.anchors = []
+        self._href = None
+        self._parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "a" and self._href is None:
+            href = dict(attrs).get("href")
+            if href:
+                self._href = href
+                self._parts = []
+
+    def handle_data(self, data):
+        if self._href is not None:
+            text = data.strip()
+            if text:
+                self._parts.append(text)
+
+    def handle_endtag(self, tag):
+        if tag == "a" and self._href is not None:
+            self.anchors.append((self._href, " ".join(self._parts)))
+            self._href = None
+            self._parts = []
+
+
+def parse_listings(html: str):
     """Return list of dicts: {url, rooms, text} for every *available*
-    (i.e. clickable / not reserved-rented) listing on the page."""
-    resp = requests.get(LISTING_URL, headers=HEADERS, timeout=30)
-    resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
+    (i.e. clickable / not reserved-rented) listing in the page HTML."""
+    collector = _AnchorCollector()
+    collector.feed(html)
 
     listings = []
     seen_urls = set()
-    for a in soup.find_all("a", href=True):
-        href = a["href"].split("?")[0].rstrip("/")
+    for raw_href, text in collector.anchors:
+        href = raw_href.split("?")[0].rstrip("/")
         if not href.startswith("https://kereby.dk/bolig/"):
             continue
         if href == "https://kereby.dk/bolig":
@@ -88,14 +117,20 @@ def fetch_listings():
             continue
         seen_urls.add(href)
 
-        text = a.get_text(" ", strip=True)
         m = re.search(r"(\d+)\s*v[æa]relser?", text, re.IGNORECASE)
         if not m:
             continue
-        rooms = int(m.group(1))
-        listings.append({"url": href + "/", "rooms": rooms, "text": text})
+        listings.append({"url": href + "/", "rooms": int(m.group(1)), "text": text})
 
     return listings
+
+
+def fetch_listings():
+    req = urllib.request.Request(LISTING_URL, headers=HEADERS)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        charset = resp.headers.get_content_charset() or "utf-8"
+        html = resp.read().decode(charset, errors="replace")
+    return parse_listings(html)
 
 
 def send_email(subject: str, body: str) -> None:
@@ -439,6 +474,37 @@ def _fill_and_maybe_submit(page, submit: bool, url: str) -> bool:
 
 
 def main():
+    # Fast path used by the workflow: just report whether there is anything
+    # new to apply to, WITHOUT needing Playwright/Chromium installed. The
+    # workflow only installs the browser (slow) when this says has_new=true.
+    if os.environ.get("CHECK_ONLY", "").lower() == "true":
+        seen = load_seen()
+        listings = fetch_listings()
+        new = [l for l in listings if l["rooms"] == TARGET_ROOMS and l["url"] not in seen]
+        print(f"[check] {len(listings)} available listings, {len(new)} new {TARGET_ROOMS}-room match(es).")
+        if new:
+            # Immediate heads-up email listing everything that was found,
+            # sent before the (slower) booking attempt starts.
+            lines = [f"- {l['text']}\n  {l['url']}" for l in new]
+            body = (
+                f"Found {len(new)} new {TARGET_ROOMS}-room listing(s) on kereby.dk:\n\n"
+                + "\n\n".join(lines)
+                + "\n\nThe bot is now attempting to book a viewing. "
+                  "You will get a separate email with the result."
+            )
+            try:
+                send_email(
+                    subject=f"[Kereby] {len(new)} new {TARGET_ROOMS}-room listing(s) found",
+                    body=body,
+                )
+            except Exception as e:
+                print(f"[check] could not send 'found' email: {e}")
+        out_path = os.environ.get("GITHUB_OUTPUT")
+        if out_path:
+            with open(out_path, "a") as f:
+                f.write(f"has_new={'true' if new else 'false'}\n")
+        return
+
     test_url = os.environ.get("TEST_URL", "").strip()
     test_submit = os.environ.get("TEST_SUBMIT", "false").lower() == "true"
     if test_url:
