@@ -96,19 +96,6 @@ jobs:
           NOTIFY_TO: ${{ secrets.NOTIFY_TO }}
         run: python apply_bot.py
 
-      - name: Upload confirmation/preview screenshots (debugging aid)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: form-screenshots
-          path: |
-            /tmp/confirm_*.png
-            /tmp/preview_*.png
-            /tmp/debug_*.png
-            /tmp/step_*.png
-          if-no-files-found: ignore
-          retention-days: 14
-
       - name: Commit updated seen.json
         run: |
           git config user.name "kereby-watcher-bot"
