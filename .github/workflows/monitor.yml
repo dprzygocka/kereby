@@ -1,4 +1,4 @@
-name: kereby flat monitor
+name: kereby
 
 on:
   workflow_dispatch:
