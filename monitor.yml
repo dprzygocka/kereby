@@ -1,0 +1,75 @@
+name: kereby flat monitor
+
+on:
+  workflow_dispatch:
+  # Optional fallback if you don't use cron-job.org (GitHub may delay or drop runs):
+  # schedule:
+  #   - cron: "*/5 * * * *"
+
+# Serialise runs so two dispatches can never corrupt the state file.
+concurrency:
+  group: kereby-monitor
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Poll Kereby
+        env:
+          POLL_WINDOW: "50"
+          POLL_INTERVAL: "10"
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          AUTO_BOOK_VIEWINGS: ${{ secrets.AUTO_BOOK_VIEWINGS }}
+          BOOKING_NAME: ${{ secrets.BOOKING_NAME }}
+          BOOKING_EMAIL: ${{ secrets.BOOKING_EMAIL }}
+          BOOKING_PHONE: ${{ secrets.BOOKING_PHONE }}
+          BOOKING_PRIVACY_ACCEPTED: ${{ secrets.BOOKING_PRIVACY_ACCEPTED }}
+          TARGET_ROOMS: ${{ vars.TARGET_ROOMS }}
+          MAX_MONTHLY_RENT: ${{ vars.MAX_MONTHLY_RENT }}
+        run: python monitor.py
+
+      - name: Commit state
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add listings_state.json
+          if git diff --cached --quiet; then
+            echo "State unchanged."
+            exit 0
+          fi
+          git commit -m "Update listing state"
+          for attempt in 1 2 3; do
+            if git push; then
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt); merging remote bookings and retrying."
+            cp listings_state.json /tmp/ours.json
+            git fetch origin main
+            git show origin/main:listings_state.json > /tmp/theirs.json || echo '{}' > /tmp/theirs.json
+            python monitor.py --merge-bookings /tmp/ours.json /tmp/theirs.json
+            git reset --hard origin/main
+            cp /tmp/ours.json listings_state.json
+            git add listings_state.json
+            git commit -m "Update listing state" || true
+          done
+          echo "Could not push state after 3 attempts."
+          exit 1
