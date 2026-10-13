@@ -1,67 +1,103 @@
-# kereby-watcher
+# kereby flat monitor
 
-Watches https://kereby.dk/bolig/ for 2-room listings and automatically books
-a viewing ("Book fremvisning") the moment one appears, then emails you a
-confirmation.
+Polls [kereby.dk/bolig](https://kereby.dk/bolig/) and emails you when a flat becomes
+available, either as a brand new listing or because a reservation fell through.
+Optionally it also requests a viewing automatically.
 
-## ⚠️ Test before you trust it
+## How it works
 
-Run once locally (or via `workflow_dispatch` with `AUTO_APPLY` temporarily
-set to `false`) before letting it apply on autopilot. The form was mapped
-from the static HTML, not a live browser session, so field-matching (done
-by visible label text via Playwright) should be verified once against the
-real site. The workflow also uploads a screenshot taken right after
-submission as a build artifact — check the first one or two runs to confirm
-the form actually went through (and that no CAPTCHA silently blocked it).
+`monitor.py` fetches the listing page, parses every `jorato-case-card` article and
+compares the result with `listings_state.json` from the previous run.
 
-## 1. Create the repo
+| Transition                               | Action             |
+| ---------------------------------------- | ------------------ |
+| Card id not seen before, `available`     | Email as NEW       |
+| Was not available, now `available`       | Email as REPOSTED  |
+| Was `available`, now not available       | Log to stdout only |
+| No change                                | Nothing            |
 
-Push these files to a **private** GitHub repo (private keeps your applicant
-details out of public logs; you get 2,000 free Actions minutes/month on
-private repos, plenty for a 5-minute poll).
+The page uses `available`, `reserved` and `completed`. Anything not `available`
+counts as unavailable. The state file is overwritten after each comparison and
+committed back by the workflow.
 
-## 2. Add repo secrets
+### Known blind spots
 
-Settings → Secrets and variables → Actions → New repository secret:
+- **Reserve then cancel between two polls** looks identical in both snapshots and is
+  not reported. Shorter polling narrows the window but cannot close it.
+- **24 card render cap.** The widget renders at most 24 cards. The monitor compares
+  the "N resultater" header with the cards it parsed and emails a warning if cards
+  are missing.
 
-| Secret | Purpose |
-|---|---|
-| `APPLICANT_NAME` | Name filled into the "Navn" field |
-| `APPLICANT_EMAIL` | Email filled into the form, and used as SMTP login if you reuse it |
-| `APPLICANT_MESSAGE` | Message filled into "Din besked" |
-| `SMTP_HOST` | e.g. `smtp.gmail.com` |
-| `SMTP_PORT` | e.g. `587` |
-| `SMTP_USER` | Your SMTP login (e.g. Gmail address) |
-| `SMTP_PASS` | An **app password**, not your normal password (Gmail: Google Account → Security → App passwords) |
-| `NOTIFY_TO` | Where the "applied for you" email should land |
+## Setup
 
-## 3. Test it
+1. Make the repo **private** and push these files (delete the old `apply_bot.py`
+   and `seen.json`).
+2. Generate a baseline locally so the first run does not email every flat:
+   ```
+   pip install -r requirements.txt
+   python monitor.py          # writes listings_state.json, sends no email
+   DEBUG=1 python monitor.py  # optional: print parsed listings and exit
+   git add listings_state.json && git commit -m "Add baseline" && git push
+   ```
+3. Add Actions secrets (Settings > Secrets and variables > Actions):
 
-Go to the Actions tab → "Watch Kereby listings" → "Run workflow" to trigger
-it manually once, and check the log + the uploaded screenshot artifact.
+   | Secret      | Notes                                   |
+   | ----------- | --------------------------------------- |
+   | `SMTP_HOST` | e.g. `smtp.gmail.com`                   |
+   | `SMTP_PORT` | `587` (STARTTLS)                        |
+   | `SMTP_USER` | Also the From address                   |
+   | `SMTP_PASS` | Gmail app password, no spaces           |
+   | `EMAIL_TO`  | Optional, defaults to `SMTP_USER`       |
 
-## 4. Let it run
+   If SMTP is missing the script prints the email to stdout instead of crashing.
+4. Actions tab > "kereby flat monitor" > Run workflow, and check the log.
 
-Once you're confident it works, leave the `schedule` trigger as-is — it
-polls every 5 minutes (GitHub may space runs out further under load, so
-treat this as "roughly every 5–15 minutes", not exact).
+## Schedule
 
-## How it decides what's "new"
+GitHub's cron is unreliable, so use [cron-job.org](https://cron-job.org/) to call
+the workflow dispatch API every minute. Each run polls every `POLL_INTERVAL` (10 s)
+for `POLL_WINDOW` (50 s).
 
-Every run scrapes the full listing page, keeps only listings tagged with
-`TARGET_ROOMS` rooms (2 by default) that are still clickable (reserved/rented
-units aren't linked on the site, so they're naturally excluded), and diffs
-against `seen.json` in the repo. Anything new gets applied to, emailed about,
-and added to `seen.json`, which the workflow commits back so it's never
-re-applied to.
+1. Create a fine-grained GitHub token: resource owner `dprzygocka`, only this repo,
+   **Actions: Read and write**, with an expiry date.
+2. cron-job.org job, every 1 minute:
+   - Method `POST`, expected response `204`
+   - URL `https://api.github.com/repos/dprzygocka/kereby/actions/workflows/monitor.yml/dispatches`
+   - Body `{"ref":"main"}`
+   - Headers:
+     ```
+     Authorization: Bearer <token>
+     Content-Type: application/json
+     Accept: application/vnd.github+json
+     X-GitHub-Api-Version: 2022-11-28
+     ```
+3. A `401`/`403` usually means the token expired. Replace it in cron-job.org only.
 
-## Known limitations
+The workflow's `concurrency` group serialises runs so the state file cannot be corrupted.
 
-- If Kereby adds a CAPTCHA to the booking form, automated submission will
-  likely fail silently — check the screenshot artifacts periodically.
-- If Kereby changes their form's visible labels, the Playwright selectors
-  in `apply_bot.py` may need updating.
-- GitHub's free scheduler is best-effort timing, not real-time.
-- Automating form submissions against a site may be against its terms of
-  service — this is intended for personal, low-volume use (checking your
-  own housing search), not high-frequency scraping.
+## Automatic viewing requests
+
+When a new or reposted flat matches all of these, the monitor requests a viewing:
+
+- Area: Frederiksberg, København K, Nørrebro, Østerbro or Vesterbro
+- Rent at most 20,000 DKK (override with repo variable `MAX_MONTHLY_RENT`)
+- Optional rooms filter via repo variable `TARGET_ROOMS` (e.g. `2` or `2,3`)
+- Slot: first weekday at least two days away, earliest offered time
+
+This is a viewing request, not a reservation. Successful requests are stored in
+`listings_state.json` so they are never repeated; failures retry up to 5 times.
+
+Enable with these secrets (never put values in the repo):
+
+| Secret                     | Value                                              |
+| -------------------------- | -------------------------------------------------- |
+| `AUTO_BOOK_VIEWINGS`       | `1`                                                |
+| `BOOKING_NAME`             | Your full name                                     |
+| `BOOKING_EMAIL`            | Your email                                         |
+| `BOOKING_PHONE`            | Danish number, with or without `+45`               |
+| `BOOKING_PRIVACY_ACCEPTED` | `1`, only after reading Kereby's privacy policy    |
+
+Kereby only accepts a request when every screening question is confirmed, so the
+monitor answers yes to all of them (for example no RKI registration, no pets, and
+a move-in date for some flats). The notification email lists what was confirmed.
+Only enable this if those statements are true for you.
