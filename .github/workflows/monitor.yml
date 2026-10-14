@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
-       with:
+        with:
           ref: main
 
       - uses: actions/setup-python@v5
