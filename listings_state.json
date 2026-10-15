@@ -55,7 +55,7 @@
     "req": "",
     "rooms": "3",
     "size": "82",
-    "state": "reserved",
+    "state": "completed",
     "url": "",
     "zip": "2200"
   },
@@ -144,8 +144,8 @@
     "req": "",
     "rooms": "5",
     "size": "160",
-    "state": "reserved",
-    "url": "",
+    "state": "available",
+    "url": "https://kereby.dk/bolig/jagtvej-183-1-tv-2100-kobenhavn/",
     "zip": "2100"
   }
 }
