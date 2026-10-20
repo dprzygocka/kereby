@@ -83,18 +83,6 @@
     "url": "",
     "zip": "2900"
   },
-  "28170": {
-    "address": "Allersgade 1, 2. tv, 2200 København N",
-    "lat": "55.69655616",
-    "lng": "12.54590578",
-    "rent": "15279",
-    "req": "Elevator",
-    "rooms": "3",
-    "size": "95",
-    "state": "reserved",
-    "url": "",
-    "zip": "2200"
-  },
   "28183": {
     "address": "Sundbyvester Plads 9, 1. tv, 2300 København S",
     "lat": "55.64599436",
