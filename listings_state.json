@@ -67,7 +67,7 @@
     "req": "Altan",
     "rooms": "3",
     "size": "96",
-    "state": "reserved",
+    "state": "completed",
     "url": "",
     "zip": "2900"
   },
@@ -144,7 +144,7 @@
     "req": "",
     "rooms": "3",
     "size": "57",
-    "state": "reserved",
+    "state": "completed",
     "url": "",
     "zip": "2300"
   },
